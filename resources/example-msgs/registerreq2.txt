@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<KVMessage type="register">
+<Message>2222222222@255.255.255.255:5000</Message>
+</KVMessage>
