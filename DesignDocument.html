@@ -1,0 +1,585 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<html>
+<head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8"/>
+	<title></title>
+	<meta name="generator" content="LibreOffice 4.4.2.2 (Linux)"/>
+	<meta name="created" content="00:00:00"/>
+	<meta name="changed" content="2015-08-29T05:50:26.419124009"/>
+	<style type="text/css">
+		@page { margin-left: 0.38in; margin-right: 0.38in; margin-top: 0.5in; margin-bottom: 0.5in }
+		p { margin-bottom: 0.1in; line-height: 120% }
+		pre.cjk { font-family: "Droid Sans Fallback", monospace }
+	</style>
+</head>
+<body lang="en-US" dir="ltr">
+<pre class="western"><font color="#ff3333">KVSTORE</font>
+<font color="#ff3333">Section #105, TA: Arka Bhattacharya</font>
+<font color="#ff3333">Michele Vascelli (kl)</font>
+
+<font color="#ff3333">1 KVCLIENT</font>
+<font color="#ff3333">Overview</font>
+This class allows a client to issue requests (get, put, del) to the server over the network. A client makes a request by sending a KVMessage over to the server, which then send its own response. Functionality to make a remote connection is provided, and it guarantees that each request is made through an independent connection. 
+
+<font color="#ff3333">Correctness Constraints</font>
+- Must implement get, put, and del client requests to the master server.
+- Must provide a new connection for each request.
+- Must handle any network, and server exception which may be generated during operation
+
+<font color="#ff3333">Declarations</font>
+- public Socket connectHost() throws KVException; 
+Creates a new connection and returns a new socket for the client. Throws KVExceptions ERROR_COULD_NOT_CONNECT and ERROR_COULD_NOT_CREATE_SOCKET whenever a connection cannot be created.
+
+- public void put(String key, String value) throws KVException;
+- public String get(String key) throws KVException;
+- public void del(String key) throws KVException;
+Respectively do put, get, and del requests to the server and reads their expected server response. If the server responds with error or invalid messages, then they throw the received exception.
+
+<font color="#ff3333">Descriptions</font>
+connectHost() calls the Socket(server, port) API constructor and returns a new socket when successful.
+Exception handling is done by throwing a KVException when the socket creation fails.
+
+put() get() del() create a specific KVMessage, they provide it with necessary key and value, and then they connect the client and send the message to the server. Following, they wait to receive a response message from the server. If SUCCESS message is not received, or if the received key and value are null or empty, then a KVException is thrown with the error message passed in by the server.
+
+
+<font color="#ff3333">Testing Plan</font>
+<font color="#000000">The staff-given tests in KVClientTest are used.</font>
+<font color="#000000">A new method retrieveServerResponse() is included to facilitate checking of the server's responses. It is used in EndToEndTest.</font>
+
+
+
+
+<font color="#ff3333">2 KVMESSAGE</font>
+<font color="#ff3333">Overview</font>
+This class provides the means to generate, send, and receive messages. Messages are serialized in XML before being sent to the server, and are de-serialized when received. Both serialization and de-serialization functionalities are provided.
+
+
+<font color="#ff3333">Correctness Constraints</font>
+- Must provide a reliable system of de/serialization.
+- Must prevent the use of invalid messages;
+- Must handle any network related errors.
+- Must allow the reuse of the OutputStream of a socket to send a response
+
+
+<font color="#ff3333">Declarations</font>
+- private class NoCloseInputStream extends FilterInputStream
+Used as a wrapper for the socket inputStream. Allows the outputStream to remain open.
+
+- private void validateMessage() throws KVException;
+Checks the validity of messages before sending them, and after receiving them.
+
+- public void sendMessage(Socket sock) throws KVException;
+Sends the message over the network by converting to XML first. Must call sock.shutDownOutput() to let the receiver know that the transmission is terminated.
+
+- public KVMessage(Socket sock, int timeout) throws KVException;
+Receives an XML message from the socket, de-serializes its content, and then builds a Kvmessage instance with the data. 
+
+
+<font color="#ff3333">Descriptions</font>
+NoCloseInputStream must be used to wrap the socket inputStream. It is used in unmarshal(), because this method de-serializes data off of the socket inputStream. 
+
+ValidateMessage() uses the msgType to single out the type of message in question, and then applies a series of checks on its key, value, and message, as required by the msgType. Throws KVExceptions with the appropriate error message from KVConstants whenever an invalid message is found.
+
+sendMessage() first calls validateMessage() to verify the message validity. It then calls marshalTo() on the outputStream of the passed socket, to serialize the message and then send it over on the network. Once finished, EOF must be signaled to the receiver by calling shutdownOutput() on the passed socket.
+Cannot close the socket so that responses can still be received. Both parsing and IO exceptions are handled by throwing an appropriate KVException.
+
+KVMEssage(socket, timeout) first sets the timeout on the socket with the passed in value of timeout, then parses the received XML message through a call to unmarshal.  Then, it builds a new instance by assigning its fields with the data received from the socket. Finally it calls validateMessage() to ensure that the received message is valid. Both parsing and IO exceptions are handled by throwing the appropriate KVException.
+
+
+<font color="#ff3333">Testing Plan</font>
+The staff-given tests in KVClient are used.
+A new method testSocketStatus() is included to facilitate debugging of sockets, by inspecting its status.
+
+
+
+
+<font color="#ff3333">3 KVCACHE</font>
+<font color="#ff3333">Overview</font>
+Implements a set-associative cache with a second-chance eviction policy for each of the sets in the cache. 
+
+<font color="#ff3333">Correctness Constraints</font>
+- Must implement second-chance eviction policy
+	- When get is called on a key, the reference bit of that entry is set to True. 
+	- If put is called on an existing key, the value is overwritten in the existing entry 	and the reference bit is set to True. The entry’s position in the queue remains the 	same. 
+	- If put is called while the set is not full, the entry should be added to the end of 	the queue immediately. 
+	- If put is called when the set is full, the first entry with a False reference bit 	while cycling through the queue should be replaced.
+- Must provide safe concurrent operation of the cache, by providing a lock for each set. Requests must be parallel across different sets, and serial within the same set.
+
+
+<font color="#ff3333">Declarations</font>
+- final private KVCacheType cache;
+Holds the cache data structure
+
+- final private int numSets;
+Makes this data available class-wide. Used in calculating set indices during cache accesses.
+
+- final private int maxElemsPerSet;
+Used to implement second-chance eviction policy, to determine whether a set is full.
+
+- final private List&lt;Lock&gt; setLockList;
+Holds an ordered set of locks used to protect the cache sets during concurrent operations. Each set corresponds to a lock (increasing order).
+
+- public KVCache(int numSets, int maxElemsPerSet);
+Creates and initializes a cache data structure. Creates and initializes the setLockList.
+
+- public String get(String key);
+Provides safe lookup operations on the cache.
+
+- public void put(String key, String value);
+Provides safe put operations on the cache. Implements second-chance eviction.
+
+- public void del(String key);
+Provides safe cache deletions.
+
+- public Lock getLock(String key);
+Provides the lock corresponding to the set which contains the given key.
+
+
+<font color="#ff3333">Descriptions</font>
+A cache is composed of a KVCacheType which holds an ArrayList of sets. Each of these sets are represented by KVSetType objects, which contain an ArrayList of KVCacheEntries. Finally each KVCacheEntry has a key, value, and a reference bit.
+Each set is identified by an ID which starts at 0 and ends at numSets - 1.
+Each set has corresponding lock, each stored at the same index in the setLockList.
+To access a particular stored entry in the cache, first you find the set index by hashing the key value modulo numSet:  int set_id = Math.abs(key.hashCode()) % numSets;
+Then, once a particular set has been picked, then you run through the entries of the set and continue until the key is found. For new insertions with an empty cache, a new entry is simply inserted at the end of the list corresponding to a set.
+
+Both get and del use this basic approach, for get though, once an entry is accessed we set its reference bit to True as required by the second-chance policy. Both return null if no match is found.
+In put, first we try to find a matching key in the cache by searching in the previously mentioned fashion. If a match is found, then we only replace the value, and the reference bit is set to True per the second-chance policy. In the case that a match is not found, we check if the picked set is full or not. If the set has enough space for a new entry, then it is inserted at the end of the list for the set. Else, in a loop, we check the first entry in the list of the set, and if its reference bit is False, then we evict it by replacing both key and value. If the reference is True we move the entry at the back of the list, and we set its reference bit to False, after which we repeat the process until we find an entry to evict.
+
+getLock() provides a lock for a particular set, and it must be called by the cache user before any access. Although concurrency handling is not directly implemented in this class, it is specified in the interface of the public methods that any user must access it only through a lock. The actual locking is done in KVServer.
+<font color="#ff3333">Testing Plan</font>
+The staff-given tests in KVCacheTest are used.
+
+
+
+<font color="#ff3333">4 KVSERVER, KVSTORE</font>
+<font color="#ff3333">Overview</font>
+KVServer implements the operations directly performed by the server. It provides atomic put, get, and del, as write-through operations, which, through locking, are applied in parallel for different sets, and serially within the same set.
+KVStore handles the backing store for the server, and it writes and reads its data to files.
+
+<font color="#ff3333">Correctness Constraints</font>
+- Operations on same sets must be serial, and parallel otherwise
+- Atomicity must be enforced.
+- Storage consistency must be implemented using a write-through approach.
+- Serve requests only with the KVCache whenever possible.
+- Exception handling must be performed for invalid operations.
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">KVServer</font>
+- public void put(String key, String value) throws KVException 
+Puts data into storage and cache(write-through). Must check for invalid key and invalid value arguments.
+
+- public String get(String key) throws KVException
+Gets data in cache if there, otherwise from the store and then updates the cache. If not in store must throw KVException
+
+- public void del(String key) throws KVException
+Deletes entry from both cache and store, and must throw KVException if key is not in store.
+
+<font color="#ff3333">KVStore</font>
+- public void dumpToFile(String fileName)
+Serializes the store to a file.
+
+- public void restoreFromFile(String fileName)
+De-serializes a file and restores the store to the data obtained from the file.
+
+<font color="#ff3333">Descriptions</font>
+KVServer implements each get, del, and put operation wrapped inside the control of locks. Each set has a corresponding lock, and in that way it is guaranteed that each access per same set will be serial and parallel otherwise.
+put checks for the validity of the key and the value and possibly throws a KVException. Then it grabs a lock for the set and updates both the cache and the store, after which it releases the lock.
+get grabs the lock for the set and then checks if the entry is in the cache, if not it looks in the store. If data is found in the store, then the cache is updated and the value is returned, otherwise KVStore raises an invalid key KVException. Finally the lock is released.
+del operates similarly to put, and here as well, both the cache and the store must be updated.
+
+KVStore dumpToFile calls marshalTo on the given fileName outputStream. Exceptions are disregarded. 
+restoreFromFile instead, calls resetStore(), to reinitialize the store, and then it calls unmarshal on the given fileName. The data is parsed as KVPairType which is then used to perform put operations on the store.
+<font color="#ff3333">Testing Plan</font>
+The staff-given tests in KVServerTest, and KVStoreTest are used.
+
+
+
+
+
+<font color="#ff3333">5 SOCKETSERVER, SEVERCLIENTHANDLER, THREADPOOL</font>
+<font color="#ff3333">Overview</font>
+SocketServer generically implements TCP network connections for the server. ServerClientHandler provides the implementation details for the server connections, and it handles them asyncronously through the use of a thread pool. Finally ThreadPool provides the implementation for a fixed pool of threads which independently work on jobs assigned to them by the ServerClientHandler
+
+<font color="#ff3333">Correctness Constraints</font>
+- Correct thread concurrent implementation by using synchronization mechanisms, to allow the threadPool to execute jobs as they become available.
+- Maintain the generality of SocketServer by handling the details of requests in ServerClientHandler
+- Allow the ServerSocket to be stopped cleanly (with no thrown exceptions)
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">SocketServer:</font>
+- public void connect() throws IOException;
+Creates a new ServerSocket and binds it to a port
+
+- public void start() throws IOException;
+Allows the ServerSocket to begin accepting requests, which are then handled asyncronously, by the ServerClientHandler through its threadPool. Provide implementation to close the ServerSocket cleanly.
+
+<font color="#ff3333">ServerClientHandler:</font>
+- public void handle(Socket client);
+<a name="__DdeLink__1023_1434172989"></a>Handles the details of request handling abstracted in SocketServer. Receives a KVMessage, whose type dictates the type of request to forward to the thread pool for execution.
+
+- private class getJob implements Runnable;
+Used to encapsulate the task necessary for the Thread Pool to execute a get request. It is instantiated by handle()
+
+- private class putJob implements Runnable;
+Used to encapsulate the task necessary for the Thread Pool to execute a put request. It is instantiated by handle()
+
+- private class delJob implements Runnable;
+Used to encapsulate the task necessary for the Thread Pool to execute a del request. It is instantiated by handle()
+
+<font color="#ff3333">ThreadPool:</font>
+- public Thread threads[]; 
+Array of WorkerThreads in the pool.
+
+- private final List&lt;Runnable&gt; jobQueue;
+List used to store the requested jobs sent by ServerClientHandler. It is used to implement WorkerThread synchronization.
+
+- private boolean stopped;
+Provides the means to stop the threadPool.
+
+- private final int poolSize;
+Stores the number of threads in the threadPool.
+
+- public ThreadPool(int size);
+Constructs the thread pool, initializes the jobQueue, and finally starts all the WorkerThreads.
+
+- public void addJob(Runnable r) throws InterruptedException;
+Adds a Runnable job to the jobQueue
+
+- public Runnable getJob() throws InterruptedException;
+Gets a new job for each thread in the pool to execute
+
+- public class WorkerThread extends Thread;
+A thread in the pool
+
+
+<font color="#ff3333">Descriptions</font>
+ThreadPool() initializes the jobQueue, then it instatiates poolSize number of WorkerThreads, and finally starts all the Workers.
+addJob() adds the passed Runnable job to the jobQueue, and uses the Object class method notifyAll() to let the workers know that a job is available in the queue.
+getJob() gives a job to the calling worker thread, but only if a job is actually available. This is implemented by using the Object method wait() for the jobQueue object.
+The WorkerThread class provides the implementation of a thread in the pool. It extends Thread, and therefore it includes the run() method, which is called by start() in the ThreadPool constructor. Each WorkerThread is blocked in the call getJob() until the jobQueue receives an available job, and signals them to take a job.
+
+ServerClientHandler handle() is called by SocketServer when a connection is available. It first reads a received KVMessage, and then checks its type by calling getMsgType(), after which it instantiates the appropriate job. The jobs to handle are either get, put, or del, and each of these has a matching job class. These job classes contain the logic used by a thread in the ThreadPool to execute the requested job. After handle() has determined the type of the job in question, then it instantiates the matching job class, and it enqueues it in the Thread Pool queue of jobs. Each job will perform the requested operation on the KVServer, and then the result is encapsulated in a KVMessage, which is then sent to the client. If the operation on the KVServer throws a KVException, then the particular message in that exception is wrapped in a KVMessage, and sent to the client in place of the result.
+
+SocketServer must remain a generic class in order to allow it to handle all TCP network connections which may arrive on a particular hostname, port tuple. To ensure this, the field handler of type NetworkHandler is provided. Through addHandler(), this field will receive the appropriate Handler class which will be tasked to provide the implementation necessary to handle specific types of jobs. In particular, start() will use this NetworkHandler instance to handle requests received through the ServerSocket instance.
+In SocketServer, connect() first instantiates a ServerSocket, then obtains the assigned port, and finally it calls setSoTimeout() to assign a timeout to the socket connection. Once this timeout has been reached by the idle socket, then a SocketTimeoutException is thrown. In start() we have the loop which allows the ServerSocket to continuously accept new connections until stop() is called. At that point the SocketServer will reach the previously mentioned timeout, and thus will throw the SocketTimeoutException, which will lead to the clean ServerSocket closure which we wanted to achieve. 
+
+
+<a name="__DdeLink__220_1434172989"></a><font color="#ff3333">Testing Plan</font>
+The staff-given tests in SocketServerTest, ThreadPoolTest are used.
+EndToEndTest tests the general functionality of the system, and it uses the provided EndToEndTemplate.
+EndToEndTest performs multiple puts, and it verifies, with matching gets, that the operations actually succeeded. A del with a previously put key is performed, and the successful response of the server to the client is checked by using the method retrieveServerResponse from KVClient. Then a get operation on the previously deleted key is performed, and here too, the response of the server to the client is checked. (ERROR_NO_SUCH_KEY). Finally the same key is re-put, and the successful server response is checked again.
+<font color="#ff3333">6 MESSAGE PASSING</font>
+<font color="#ff3333">Overview</font>
+Allow the implementation of the KVMessages sent in the TPC protocol.
+
+<font color="#ff3333">Correctness Constraints</font>
+- Must ensure correctness of the format of these new messages with appropriate error checking. Given the simplistic nature of the READY, ABORT, COMMIT, and ACK messages, no validity check is necessary. But extensive checks must be performed on the REGISTER, and its RESP messages.
+
+<font color="#ff3333">Declarations</font>
+Aside from the previously introduced messages: getreq, putreq, and delreq, now it is necessary to consider the following ones: ready_vote, abort_vote, commit_decision, abort_decision, and ack.
+Their implementation follows the regular implementation of any other KVMessage, aside from any new error checking done on these new messages.
+
+<font color="#ff3333">Descriptions</font>
+In KVMessage, the method validateMessage() is updated to include a REGISTER message check, which throws a KVException INVALID_FORMAT should the format be invalid. TPCSlaveInfo's constructor performs an extensive check on the REGISTER message content by using the java.util.regex library. In TPCMasterHandler, the method registerWithMaster checks the RESP to the REGISTER message, and throws ERROR_INVALID_FORMAT KVException if it is not valid.
+
+<font color="#ff3333">Testing Plan</font>
+The test class SlaveRegistrationMessagesTest contains test methods: successfullyParsesDelReq(), successfullyParsesDelResp(), which respectively check that REGISTER request messages, and REGISTER RESP messages are correctly parsed at message receival. To do that two new example messages are created and stored in the resources/example-msgs folder. They are registerreq.txt, and registerresp.txt.
+These test methods read from the previous two files, and through socket mocking, they simulate a message receival. The KVMessage() constructor receives the message, and then validity of each field is checked with assert statements. Furthermore, TPCSlaveInfoTest performs numerous tests on the slaveInfo message carried by the REGISTER KVMessage.
+
+
+
+
+<font color="#ff3333">7 SLAVE REGISTRATION</font>
+<font color="#ff3333">Overview</font>
+Provides the logic necessary to register KServer slaves. Implements the data structure used to represent each slave.
+
+<font color="#ff3333">Correctness Constraints</font>
+- Must check and properly parse the input string info of the TPCSlaveInfo class.
+- Correct use of Thread Pool to implement registration tasks
+- Correct and error-free network setup between the slaves and the master
+- Must control that only a given number of slaves can register, and no more
+- Must block any request made to a slave if the expected number of slaves have not already registered
+- Must allow and eventually control the process by which a returning slave re-registers with the same slaveID
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">TPCSlaveInfo:</font>
+- public TPCSlaveInfo(String info) throws KVException;
+Initializes the TPCSlaveInfo object with the data obtained by parsing the input info string.
+
+- public Socket connectHost(int timeout) throws KVException;
+Creates and connects the socket and sets a timeout on the connection
+
+
+
+<font color="#ff3333">TPCRegistrationHandler:</font>
+- public void handle(Socket slave);
+Creates a registration job to be executed by a thread in a thread pool
+
+- private class registerJob implements Runnable;
+Encapsulates the logic necessary to perform a slave registration. It includes the run method executed by a thread in the Thread Pool
+
+<font color="#ff3333">TPCMasterHandler:</font>
+public void registerWithMaster(String masterHostname, SocketServer server) throws KVException;
+Allows a slave server to register with a given master
+
+
+<font color="#ff3333">TPCMaster:</font>
+- public static final int MIN_SLAVE_NUM = 2;
+By default, the minimum number of slaves registered must be 2
+
+- private final TreeMap&lt;Long, TPCSlaveInfo&gt; slaveMap;
+Used to store mappings of slaveIDs to their matching TPCSlaveInfo. This structure is used to implement the slave registration blocking functionality used to block requests which come before all the expected slaves are registered.
+
+- public void registerSlave(TPCSlaveInfo slave);
+Used to register a slave with the master
+
+- public TPCSlaveInfo findFirstReplica(String key)
+Used to find the first replica slave which has a mapping for the given key
+
+- public TPCSlaveInfo findSuccessor(TPCSlaveInfo firstReplica)
+Used to find the second replica slave to the first one obtained with findFirstReplica()
+
+- private void waitForExpectedSlaves();
+Blocks calls to handleGet(), and handleTCPRequest until the numSlave quota of slave registrations has been met.
+
+- private class keyComparator implements Comparator&lt;Long&gt;;
+Its compare() method is used by the slaveMap structure to order its nodes.
+
+<font color="#ff3333">TPCClientHandler:</font>
+- public void handle(Socket client);
+Handles the details of request handling abstracted in SocketServer. Receives a KVMessage, from the client, whose type dictates the type of request to forward to the thread pool for execution.
+
+<a name="__DdeLink__1026_1434172989"></a>- private class getJob implements Runnable;
+Used to encapsulate the task necessary for the Thread Pool to execute a get request. It is instantiated by handle()
+
+- private class TPCJob implements Runnable;
+Used to encapsulate the task necessary for the Thread Pool to execute the TPC operations of put and del. It is instantiated by handle()
+
+
+  
+
+<font color="#ff3333">Descriptions</font>
+TPCSlaveInfo() uses the java.util.regex library to match the info string to the given correct pattern (final String REGEX).If the string matches then it is parsed for the fields necessary to initialize the class instance (slaveID, hostname, port). Otherwise a KVException INVALID_FORMAT is thrown. The method validIPAddress() is called to validate the parsed hostname.
+connectHost() is almost identical to the KVClient connectHost. The only difference is that here a timeout is provided as an argument, so on top of the socket.connect() call, we must also call setSoTimeout(). The method will throw a KVException both in the case of failed socket creation or IO error, and also for SocketTimeoutException.
+
+TPCRegistrationHandler:
+handle() behaves in the same fashion as ServerClientHandler's handle()
+Class registerJob will be instantiated by handle() and enqueued in the worker thread queue. The run method in this class first receives a register request coming from a slave, then the TPCMaster uses the data contained in the message to instantiate a TPCSlaveInfo object, which is then used as an argument for the method registerSlave() of the master. After the registration, a RESP KVMessage with the success statement is sent to the slave, confirming a successful registration. Should the registration fail, then the KVEXception thrown is sent in a KVMessage back to the slave.
+
+TCPMasterHandler:
+registerWithMaster() connects the slave to port 9090 (static final int REGISTRATION_PORT) of the master. Then the slave sends a register request to the master with its slaveID, and the data of the KVServer (hostname, port). Then the answer KVMessage of the server is read, and if not successful, then a KVException is thrown. If the the response from the master contains the error message from KVConstants ERROR_SLAVE_QUOTA_ALREADY_MET, then it means that the master cannot register any more slaves, and thus an exception with the same error message is thrown.
+
+TPCMaster:
+registerSlave() operates under synchronization provided by the slaveMap. If the provided slaveID is already stored in slaveMap, then the TCPSlaveInfo in the slaveMap is updated with the new hostname, and port. This allows fallen slaves to re-register with the master once they come back up. Otherwise, if the numSlaves quota of expected slaves has not been reached yet, then register the new slave by inserting its slaveID, and its TPCSlaveInfo into the slaveMap. If the numSlaves quota is reached, then the notifyAll() method of the slaveMap is called to signal all blocked requests that they can be processed. Once the quota is met, then any call to registerSlave will throw an ERROR_SLAVE_QUOTA_ALREADY_MET KVException.
+findFirstReplica() and findSuccessor() are implemented respectively by using the TreeMap API methods ceilingEntry(), and higherEntry(). Both methods must operate under synchronization provided by the slaveMap to avoid any race condition.
+WaitForExpectedSlaves() blocks the caller until the registration quota has been met. It uses synchronization methods of the object slaveMap to implement a condition variable.
+The compare() method of class KeyComparator uses the provided method isLessThanUnsigned(), and isLessThanEqualUnsigned() to compare two slaveIDs, returning -1 if key1 is less than key2, 0 if equal, and 1 if greater.
+
+TPCClientHandler:
+Its implementation is analogous to that of ServerClientHandler, aside from the new class handling TPC jobs: TPCJob.
+TPCJob and getJob will call respectively handleTPCRequest(), handleGet() of the TPCMaster to perform the requests. As for ServerClientHandler, they will receive a reply from the master, or an exception, and in both cases, this information will be forwarded to the client.
+
+
+<font color="#ff3333">Testing Plan</font>
+TPCSlaveInfo includes a method validIPAddress() which is used to validate the passed IP address by checking that the octets are in the range 0-255.
+TPCSlaveInfoTest contains several tests to check proper slave information parsing, and they all involve calling the constructor, and then verify, depending on the input, whether the instance fields are properly initialized, or the expected KVExceptions are thrown. testValidSlaveData() uses a given slave input String and makes sure that the instance created with it is valid. 
+TestNegativeSlaveID() asserts that instances can be created with negative slaveIDs.
+TestInvalidSlaveID(), testInvalidSlaveHost(), and testInvalidSlavePort(), all perform multiple checks on wrong slave input Strings, and they check that all those errors are met with a KVException. 
+TestImpossibleConnection() verifies that the proper KVException is thrown when trying to call connectHost() with host data which point to a host which is not connected.
+TestValidNetworkingData() creates a serverRunner to run an instance of TPCMasterHandler, and then tries to use the given TPCSlaveInfo instance to connect to it. Any failure during the connection is checked with a fail statement.
+TPCRegistrationHandlerTest has a test method testRegistrationResponse() which analyzes registration response messages to ascertain the correctness of the code. 
+Files registerrq.txt, registerreq.txt, registerreq2.txt, registerreq3.txt, are stored in the resources/example-msgs folder, and they are used as REGISTER KVMessages in the mocked implementation of socket. A TPCMaster instance is created,with 3 as a max number of slaves. A registrationHandler instance is also created, and its handle() method is called on the mocked socket. The test makes sure that the responses obtained after the 4 attempts match the expected responses. In particular, the first 3 registrations should succeed, while the 4<sup>th</sup> should be met with a KVException due to the registration quota being already reached.
+TPCMasterHandlerTest has the method testRegisterWithMaster() which attempts to verify a successful slave registration by creating a ServerRunner running a TPCMaster instance, and then having the masterHandler calling registerMaster(). Any failure is then detected.
+Similarly, the testFailedRegisterWithMaster() performs slave registrations with a master server, but in this case there are more slaves to register than the master allows, and so the test checks that the master refuses the last registration by throwing a KVException.
+TPCMasterTest has several tests which were provided by the staff, which tested registration and finding slave replicas. In addition to that, method testBlockGetUntilSlaveQuotaMet() tests that a get requests is blocked until all the quota of expected slaves is actually registered. The test uses a Timer to run a scheduled thread which will perform the last slave registration. The timer is started when the get request is made, and at completion the timer is stopped. If the time to complete the request is longer than the delay of the scheduled last registration, then the test succeeds.
+
+
+
+
+<font color="#ff3333">8 MASTER SERVER GET HANDLING</font>
+<font color="#ff3333">Overview</font>
+Implement get request handling for the Master in TPCMaster.
+
+
+<font color="#ff3333">Correctness Constraints</font>
+- Get requests from the client must be serial within the same set but parallel across different sets.
+- If masterCache can service the request, then do not contact slaves. Otherwise contact primary, and if necessary the secondary slave.
+- If secondary fails, then throw KVException ERROR_NO_SUCH_KEY to client
+
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">TPCMaster:</font>
+- public final KVCache masterCache;
+Stores the cache of the master server.
+
+- public String handleGet(KVMessage msg) throws KVException;
+Performs the get operation for the client. It may need to contact its slaves if necessary. 
+
+- private void waitForExpectedSlaves();
+Blocks request until the expected number of slaves have registered.
+
+
+<font color="#ff3333">Descriptions</font>
+handleGet() first calls waitForExpectedSlaves(), which blocks until all slaves are registered. Then the input KVMessage is read for its key, which is used to to obtain the lock of the set in the masterCache, which is then locked.
+The cache is searched for the requested value, which is returned if it is found.
+Otherwise findFirstReplica(), and findSuccessor() are called.
+The primary is connected through a call to connectHost() with a given TIMEOUT, and then the request message is sent to it. Then it waits for answer from the slave with a TIMEOUT. If the response is positive, and the value is returned, then update the masterCache and return the value. Otherwise repeat the process by contacting the secondary slave. If the secondary does not provide the requested value, then throw KVException ERROR_NO_SUCH_KEY. The method handles slave timeouts appropriately by continuing the search until the secondary fails. No matter the end result, the lock is released before exiting.
+
+
+<font color="#ff3333">Testing Plan</font>
+The staff provided testSimpleHandleGet() in TPCMAsterTest. 
+Furthermore, as previously explained in SLAVE REGISTRATION testing plan, there is a testBlockGetUntilSlaveQuotaMet(), which tests for proper request blocking.
+In EndToEnd2Test, method testFailedTPCGet() performs a non simulated invalid get operation and checks that the expected exception is thrown. 
+Then testSuccessfulMasterCacheTPCGet() checks that the masterCache alone can service a get request without contacting the empty slaves. For this test, the TPCMaster method putIntoMasterCache() was written, which directly accesses the masterCache, and puts values into it.
+Then, both testSuccessfulPrimarySlveTPCGet(), and testSuccessfulSecondarySlaveTPCGet(), perform get operations which are successfully serviced by the respective slave, and where both the other slave and the masterCache are empty. Furthermore, at the end, they both chech that the masterCache was correctly updated. For these two tests, the KVServer method putIntoCache() was written to directly put values into the caches of the slaves.
+Further testing is performed in EndToEnd3Test, but it is of a similar nature.
+Finally, the masterCache was thoroughly tested in the KVCacheTest, and it alone guarantees the required behavior of serial gets on the same set, and parallel otherwise.
+
+
+
+
+<font color="#ff3333">9 SLAVE SERVER GET HANDLING</font>
+<font color="#ff3333">Overview</font>
+TPCMasterHandler provides implementation necessary for a slave to answer to requests forwarded by the TPCMaster.
+
+
+<font color="#ff3333">Correctness Constraints</font>
+Similar to ServerClientHandler, and TPCRegistrationHandler.
+- Must use a threadPool to service get requests coming from the TPCMaster
+
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">TPCMasterHandler:</font>
+- public void handle(Socket master);
+Handles the creation of job requested by the TPCMaster, by assigning them to a threadPool.
+
+- private class getJob implements Runnable;
+Performs the get operation on the KVServer itself. It is instantiated by the handle() method, and it is enqueued in the jobQueue of the threadPool.
+
+
+<font color="#ff3333">Descriptions</font>
+The implementation is identical to those of ServerClientHandler, and TPCRegistrationHandler, so it is omitted.
+
+
+<font color="#ff3333">Testing Plan</font>
+The staff provided the testFailureGet() method in TPCMasterHandler().
+EndToEnd3Test provides a simple testSuccessfulGet(), which performs a get and confirms that it succeeds. TestFiledGet() instead check that a get operation for a non-existent key causes the correct KVException to be thrown. 
+Finally the testStressSystem() performs numerous random requests (100) among the put, del, and get possibilities, and both keys and values are also randomly generated. The test ascertain that no operation fails. For this test the method generateString() was included to generate the random values for the keys and the values.
+<font color="#ff3333">10 TPCLOG and SLAVE DURABILITY</font>
+<font color="#ff3333">Overview</font>
+Put and del requests are to be logged if a slave server needs to be able to recover from data loss. Once the logged requests are safely stored into a file, then a crashed KVServer can restore its previous state by replaying the logged requests, making sure to only repeat those requests in the log which are followed by a COMMIT message.
+
+
+<font color="#ff3333">Correctness Constraints</font>
+- Must follow logging rules indicated by the TPC protocol.
+- Must allow the KVServer to rebuild itself to its previous state should a failure occur
+- Only del and put operation should be maintained in a log.
+- Log requests as KVMessages
+
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">TPCLog:</font>
+- public void rebuildServer() throws KVException;
+Loads a log from storage, and replays committed operations to restore the state of the server.
+
+- private ArrayList&lt;KVMessage&gt; entries;
+Stores the entries of the log. Each entry is a KVMessage.
+
+
+<font color="#ff3333">Descriptions</font>
+The only method left to implement is rebuildServer().
+This method first makes a call to loadFromDisk(), which loads the logged requests into the entries ArrayList. Then for each entry in the entries list, check its type: if it is a put or a del, then store it in a temp variable. If the next entry is a commit, then read the fields of the entry, and replay the request by applying the operation directly to the KVServer storage, otherwise if it is an abort, discard the previously stored request. Continue until all the entries in the log have been analyzed.
+Regarding the logic of the actual logging of the requests during regular operation of the server, they are implemented in TPCMasterHandler, specifically in the methods phase1() and phase2(). Read part 11 for the implementation.
+
+
+<font color="#ff3333">Testing Plan</font>
+TPCLogTest method testRebuildCommitedPuts() flushes a series of puts, each followed by a valid COMMIT. Then the rebuildServer() is called, and finally the test ascertains that the KVServer actually contains the logged commits.
+TestRebuildCommittedPutsDeletes() similarly to the previous test, check that the KVServer is correctly rebuilt following a call to rebuildServer(), but this time the log includes delete requests as well.
+TestGetAbortMessages() tests that get requests followed by COMMIT are ignored, and so are put requests followed by ABORT. The test ascertains that the rebuilt KVServer does not include those keys.
+TestImproperlyCommittedMessages() tests that only logged requests which are directly followed by a COMMIT are applied to the KVServer during the rebuild process.
+
+
+
+
+<font color="#ff3333">11 TWO PHASE COMMIT LOGIC</font>
+<font color="#ff3333">Overview</font>
+Implement put and del operations by following the TPC protocol.
+
+
+<font color="#ff3333">Correctness Constraints</font>
+- Only a single TPC operation can be executed at a time.
+- Get operations must be serial if the keys are in the same set, and parallel otherwise.
+- Must block put and del requests until all the expected slaves have registered.
+- A slave sends VOTE-ABORT to the master if the key doesn't exist for DEL, or an oversized key/value is specified for PUT.
+- When sending phase-1 requests, the master must contact both slaves, even if the first slave send an abort. 
+- Both phase-1 and phase-2 will be implemented sequentially across the primary and secondary slaves
+- If the master receives any response that is not an ACK during phase-2, then throw KVException ERROR_INVALID_FORMAT
+- At any moment there will be at most one slave server down, and the master cannot fail.
+- Slave servers which fail, always return, and always with the same slaveID.
+- Failures must be handled at any point during the processing of a request.
+- When a failed slave comes back, it will restore its state by replaying the log.
+- During phase-1 if the master does not get a vote within a single timeout period, it should assume the slave voted abort.
+- During phase02, the master must retry at timeout intervals, until it receives a response to its decision.
+- Revived servers may be reconnected with different hostname and port settings.
+- The behavior of a slave must be idempotent.
+- Assume no crashes  during TPCLog.flushToDisk().
+
+
+<font color="#ff3333">Declarations</font>
+<font color="#ff3333">TPCMaster:</font>
+- public synchronized void handleTPCRequest(KVMessage request, boolean isPutReq)
+          throws KVException;
+Performs del and put requests for the client.
+
+- private String phase1(TPCSlaveInfo slave, KVMessage request) throws KVException;
+Performs the first phase of TPC for the given request, and on the given slave. This is the master side of TPC.
+
+- private void phase2(Long slaveID, KVMessage decision) throws KVException;
+Performs the second phase of TPC for the given decision, and on the given slaveID. This is the master side of TPC.
+
+- private void waitForExpectedSlaves() 
+Blocks del and put requests until the expected number of slaves have registered.
+
+<font color="#ff3333">TPCMasterHandler:</font>
+- private void phase1(KVMessage request, String requestType, Socket master) throws KVException;
+Performs the first phase of TPC for the given request. This is the the slave side of TPC.
+
+- private void phase1(KVMessage request, String requestType, Socket master) throws KVException, InterruptedException;
+Performs the second phase of TPC for the given request. This is the the slave side of TPC.
+
+- public void handle(Socket master);
+Handles requests for the Master by assigning them to a threadPool for execution.
+
+
+
+<font color="#ff3333">Descriptions</font>
+TPCMaster:
+handleTPCRequest(), like handleGet(), calls waitForExpectedSlaves() which blocks the request until all expected slaves have registered. Then, the key in the request is used to access the masterCache lock, which is thus locked. Primary and secondary slaves are obtained, and sequentially, first the primary slave is contacted by calling phase1() on it, and then then phase1() is called to contact the secondary slave. These methods will return the vote of the slaves, or they will each generate a SocketTimeoutException if they have failed, or another type of KVException if their response was an ABORT. Any exception thrown during phase1 is stored to be thrown at the end of execution of handleTPCRequest(). Then the master reads both votes of the slaves, and if they are both READY, it chooses to send a GLOBAL COMMIT to them during phase2. Now phase2 begins, and if the decision is to COMMIT, then the master updates the masterCache with the request. The decision is then used in the sequential calls to phase2 for both the primary and the secondary slaves. These calls will not end until both slaves perform their expected actions depending on the master's decision, and their respective ACKS are sent back to the master. Finally the lock is released, and if any exception was thrown during phase1, it is now thrown back to the client. Furthermore, had either call to phase2() generated a KVException ERROR_INVALID_FORMAT, then they would have been thrown by now.
+Phase1() connects the passed in slave so that the master can send the request to it. Then a response from the slave is expected within a TIMEOUT window of time. If the slave has failed, then a SocketTimeoutException is thrown, othewise the vote from the response is read. If it is READY, then it is returned, otherwise its message is encapsulated in a KVException, which is then thrown. In any event, the socket is finally closed.
+Phase2() uses the input slaveID to retrieve the most recent TPCSlaveInfo corresponding to this slave, and then it uses this information to connect to the slave. The master's decision is thus sent over to the slave, which then replies with an ACK. Should the slave fail, then then a SocketTimeoutException is thrown, and the master proceeds to resending the decision to the slave, after renewing the connection to the slave. The master keeps retrying until the slave replies with an ACK. If the reply from the slave is invalid, or not an ACK, then a KVException ERROR_INVALID_FORMAT is thrown.
+
+TPCMasterHandler:
+handle() will read the request passed in through the socket by the master, and if the message type is DEL or PUT, then it will call phase1 on those messages, otherwise if they are COMMIT or ABORT, then phase2() is called on them.
+In phase1(), if the message type is a put, then the request is flushed to the log by a call to appendAndFlush(). At this point the key and the value validity are checked against the MAX_KEY_SIZE, and the MAX_VAL_SIZE. If the validity checks fail, then a KVMEssage ABORT with the appropriate ERROR message is sent back to the master, otherwise a READY KVMessage is sent. If the request type is instead a del, then once again the request is flushed to the log, and then the KVServer is inspected for the presence of the key in the request by calling hasKEy() on it. If the KVServer does not have that key, then an ABORT KVMessage with the appropriate ERROR message is sent back to the client, otherwise a READY message is sent instead.
+In phase2() if the decision type is COMMIT, then the log is inspected to retrieve the last entry by calling getLastEntry(). If the type of the last entry is PUT, then a new Runnable put task is instantiated, and sent to the threadPool to execute. The put operation is performed on the KVServer, and with the data obtained by that last log entry previously retrieved. Similarly if the type of the previous request was a DEL, then the same sequence of steps is performed. Once the request is performed, then the COMMIT message is flushed to the log, and an ACK is sent back to the master. Notice that if the previous entry was neither a GET, nor a PUT, then it must have been a COMMIT. That indicates that the slave must have crashed after having logged the last COMMIT. In this case, there is no need to log another COMMIT, so the slave just sends an ACK back to the slave.
+If the decision sent by the master was an ABORT, then the slave simply logs the ABORT, and sends an ACK back to the master.
+
+
+
+<font color="#ff3333">Testing Plan</font>
+EndToEnd3Test performs a testSuccessfulTPCput() which puts a key value, and verifies the success of the operation by getting the same key. 
+TestEmptyKeyTPCput() attempts to put a key value where the key is the empty String. This operation should fail, and the test ascertain that it throws the expected exception.
+TestEmptyValueTPCput() is similar to the previous, but in this case the key is valid, but the value is an empty String.
+TestSuccessfulTPCdel() first puts a key value pair, then it deletes that key, and finally it tries to get it to verify whether it was actually deleted. If the test is successful, then it must throw an ERROR_NO_KEY Exception.
+TestFailedTPCPutBigValue() uses the method generateString() to generate a value longer than MAX_VAL_SIZE. The operation should throw an ERROR_OVERSIZED_VALUE, and the test makes sure of it.
+TestFailedTPCPutBigKEy() is similar to the previous, but in this case, the value is valid, but the key is larger than MAX_KEY_SIZE.
+TestFailedTPCDEl() tries to delete a non-existent key. This operation must fail, and the server checks that it is so.
+TestDuplicateSuccessfulPut() checks that putting two different values for the same key, yields a key value where the value is the latest value put in. The test gets the key at the end to verify this.
+The testStressSystem() that was previously mentioned in part 9 also applies for this part, since it performs a random combination of del, puts, and gets, for a total of 100 operations.
+Finally TPCMurderDeathKillStudTest performs testing aimed at checking the robustness of the system. The primary slave (manual testing on secondary was also successfully performed) is shutdown either before a log flush, or after, and also either during phase 1 or during phase 2.
+testP1DeathAfterLog() verifies that a put operation during phase 1 aborts when the primary is stopped after logging the request. The operation must fail, and the test verifies it.
+TestP1DeathBeforeLog() is similar to the previous, but the primary is stopped before the request is logged. Again the operation must fail, and the test verifies it.
+TestP2DeathAfterLog() stops a primary after it logged a COMMIT for a put operation. The operation must succeed, and the test check so.
+TestP2DeathBeforeLog() is similar to the previous, but here the primary is stopped before the COMMIT is actually logged. The operation should still succeed, and the test makes sure it does.</pre>
+</body>
+</html>
